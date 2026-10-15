@@ -27,18 +27,19 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def get_json(url):
+def get_json(url, *, max_bytes=MAX_BYTES):
     """Return bounded JSON internally; expose only allowlisted summary fields."""
     status = None
     try:
         req = Request(url, headers={"User-Agent": "Public-Bybit-Network-Probe"})
         with build_opener(NoRedirect()).open(req, timeout=TIMEOUT) as response:
             status = response.status
-            payload = response.read(MAX_BYTES + 1)
-        if len(payload) > MAX_BYTES:
+            payload = response.read(max_bytes + 1)
+        if len(payload) > max_bytes:
             return status, None, "response_too_large"
         try:
-            data = json.loads(payload)
+            data = json.loads(payload, object_pairs_hook=unique_object,
+                              parse_constant=reject_constant)
         except (ValueError, UnicodeError):
             return status, None, "malformed_json"
         if not isinstance(data, dict):
@@ -59,6 +60,19 @@ def get_json(url):
         else:
             kind = "connection_error"
         return status, None, kind
+
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON field")
+        result[key] = value
+    return result
+
+
+def reject_constant(value):
+    raise ValueError("Nonfinite JSON value")
 
 
 def bybit_check(url, *, candles=False):
@@ -174,6 +188,11 @@ def probe():
         return jsonify(data), status
     return render_template_string(PAGE, busy=status == 429,
         accessible=data.get("bybit_accessible", "unavailable"), summary=json.dumps(data, indent=2)), status
+
+
+from market_bridge import register_bridge
+
+register_bridge(app, get_json, RUN_LOCK)
 
 
 if __name__ == "__main__":
